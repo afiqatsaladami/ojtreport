@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getWorkweekDays, getWeekLabel } from "../lib/dateUtils";
 import { generateWeekPdf } from "../lib/pdfGenerator";
+import { computeMaxChars } from "../lib/layoutUtils";
 
 const DEFAULT_CONFIG = {
   nama: "Afiq Atsal Adami",
@@ -30,6 +31,26 @@ function parseActivities(text) {
         criticalPoint: line.slice(idx + 1).trim(),
       };
     });
+}
+
+// Mengecek tiap baris kegiatan terhadap batas karakter yang dihitung,
+// mengembalikan daftar peringatan (baris ke berapa yang kepanjangan).
+function getLengthWarnings(activities, kegiatanMax, criticalPointMax) {
+  const warnings = [];
+  activities.forEach((act, i) => {
+    const lineNo = i + 1;
+    if (act.kegiatan.length > kegiatanMax) {
+      warnings.push(
+        `Baris ${lineNo}: kolom Kegiatan kepanjangan (${act.kegiatan.length}/${kegiatanMax} karakter)`
+      );
+    }
+    if (act.criticalPoint.length > criticalPointMax) {
+      warnings.push(
+        `Baris ${lineNo}: kolom Critical Point kepanjangan (${act.criticalPoint.length}/${criticalPointMax} karakter)`
+      );
+    }
+  });
+  return warnings;
 }
 
 export default function Home() {
@@ -91,7 +112,11 @@ export default function Home() {
     const doc = generateWeekPdf(config, weekPayload);
     const filename = `Lembar_Daily_OJT_${weekDays[0].isoDate}_sd_${weekDays[4].isoDate}.pdf`;
     doc.save(filename);
-    setStatus("✅ PDF berhasil dibuat dan diunduh: " + filename);
+    setStatus(
+      "✅ PDF berhasil dibuat dan diunduh: " +
+        filename +
+        ". Kalau ada baris yang kepanjangan, otomatis dipotong (…) supaya tidak meluber."
+    );
   }
 
   return (
@@ -170,22 +195,48 @@ export default function Home() {
             Format tiap baris: <code style={styles.code}>Kegiatan | Critical point pembelajaran</code>
             <br />
             Satu baris = satu nomor kegiatan. Tanggal & paraf otomatis diatur sistem.
+            Batas karakter di bawah tiap hari otomatis menyesuaikan — makin banyak
+            kegiatan dalam sehari, makin sedikit jatah karakter per kegiatan (supaya
+            tabel selalu muat rapi di 1 halaman).
           </p>
 
-          {weekDays.map((d) => (
-            <div key={d.isoDate} style={styles.dayBlock}>
-              <div style={styles.dayLabel}>{d.hariTanggal}</div>
-              <textarea
-                style={styles.textarea}
-                rows={4}
-                placeholder={
-                  "Briefing Pagi | Diskusi target harian bersama mentor\nObservasi Area Customer Service | Memahami alur layanan nasabah"
-                }
-                value={dayTexts[d.isoDate] || ""}
-                onChange={(e) => updateDayText(d.isoDate, e.target.value)}
-              />
-            </div>
-          ))}
+          {weekDays.map((d) => {
+            const activities = parseActivities(dayTexts[d.isoDate] || "");
+            const numRows = Math.max(1, activities.length);
+            const { kegiatanMax, criticalPointMax } = computeMaxChars(numRows);
+            const warnings =
+              activities.length > 0
+                ? getLengthWarnings(activities, kegiatanMax, criticalPointMax)
+                : [];
+
+            return (
+              <div key={d.isoDate} style={styles.dayBlock}>
+                <div style={styles.dayLabel}>{d.hariTanggal}</div>
+                <textarea
+                  style={styles.textarea}
+                  rows={4}
+                  placeholder={
+                    "Briefing Pagi | Diskusi target harian bersama mentor\nObservasi Area Customer Service | Memahami alur layanan nasabah"
+                  }
+                  value={dayTexts[d.isoDate] || ""}
+                  onChange={(e) => updateDayText(d.isoDate, e.target.value)}
+                />
+                <div style={styles.limitHint}>
+                  {activities.length || 0} kegiatan hari ini → maks. ± {kegiatanMax}{" "}
+                  karakter/kegiatan, ± {criticalPointMax} karakter/critical point.
+                </div>
+                {warnings.length > 0 && (
+                  <ul style={styles.warningList}>
+                    {warnings.map((w, idx) => (
+                      <li key={idx} style={styles.warningItem}>
+                        ⚠️ {w}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
         </section>
 
         <button style={styles.downloadButton} onClick={handleDownload}>
@@ -263,7 +314,7 @@ const styles = {
     borderRadius: 4,
     color: "#c0504d",
   },
-  dayBlock: { marginBottom: 14 },
+  dayBlock: { marginBottom: 16 },
   dayLabel: {
     fontWeight: 700,
     color: "#1f3864",
@@ -281,6 +332,20 @@ const styles = {
     fontSize: 13.5,
     fontFamily: "inherit",
     resize: "vertical",
+  },
+  limitHint: {
+    fontSize: 11.5,
+    color: "#8a93a3",
+    marginTop: 4,
+  },
+  warningList: {
+    margin: "6px 0 0",
+    paddingLeft: 18,
+  },
+  warningItem: {
+    fontSize: 12,
+    color: "#b3492e",
+    lineHeight: 1.6,
   },
   downloadButton: {
     width: "100%",
