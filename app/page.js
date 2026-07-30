@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { getWorkweekDays, getWeekLabel } from "../lib/dateUtils";
 import { generateWeekPdf } from "../lib/pdfGenerator";
-import { computeMaxChars } from "../lib/layoutUtils";
+import { computeMaxChars, formatMultiPoint } from "../lib/layoutUtils";
 
 const DEFAULT_CONFIG = {
   nama: "Afiq Atsal Adami",
@@ -17,20 +17,34 @@ function todayIso() {
 }
 
 function parseActivities(text) {
-  return text
+  const rawLines = text
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const idx = line.indexOf("|");
-      if (idx === -1) {
-        return { kegiatan: line, criticalPoint: "" };
-      }
-      return {
-        kegiatan: line.slice(0, idx).trim(),
-        criticalPoint: line.slice(idx + 1).trim(),
-      };
-    });
+    .filter((line) => line.length > 0);
+
+  if (rawLines.length === 0) return [];
+
+  const numRows = rawLines.length;
+  const { maxLines, kegiatanCharsPerLine, criticalPointCharsPerLine, kegiatanMax, criticalPointMax } =
+    computeMaxChars(numRows);
+
+  return rawLines.map((line) => {
+    const idx = line.indexOf("|");
+    const kegiatanRaw = idx === -1 ? line : line.slice(0, idx).trim();
+    const criticalPointRaw = idx === -1 ? "" : line.slice(idx + 1).trim();
+
+    return {
+      // Titik koma (;) di dalam kegiatan/critical point akan otomatis
+      // dipecah jadi beberapa poin bernomor (1) 2) 3) ...) dalam 1 sel.
+      kegiatan: formatMultiPoint(kegiatanRaw, kegiatanCharsPerLine, maxLines, kegiatanMax),
+      criticalPoint: formatMultiPoint(
+        criticalPointRaw,
+        criticalPointCharsPerLine,
+        maxLines,
+        criticalPointMax
+      ),
+    };
+  });
 }
 
 // Mengecek tiap baris kegiatan terhadap batas karakter yang dihitung,
@@ -194,10 +208,13 @@ export default function Home() {
           <p style={styles.hint}>
             Format tiap baris: <code style={styles.code}>Kegiatan | Critical point pembelajaran</code>
             <br />
-            Satu baris = satu nomor kegiatan. Tanggal & paraf otomatis diatur sistem.
-            Batas karakter di bawah tiap hari otomatis menyesuaikan — makin banyak
-            kegiatan dalam sehari, makin sedikit jatah karakter per kegiatan (supaya
-            tabel selalu muat rapi di 1 halaman).
+            Satu baris = satu nomor kegiatan. Kalau 1 kegiatan punya beberapa poin
+            pembelajaran, pisahkan pakai titik koma (<code style={styles.code}>;</code>),
+            contoh: <code style={styles.code}>Briefing pagi | Poin 1; Poin 2; Poin 3</code>{" "}
+            — otomatis diberi nomor 1) 2) 3) dalam satu sel.
+            <br />
+            Tanggal & paraf otomatis diatur sistem. Batas karakter di bawah tiap
+            hari otomatis menyesuaikan jumlah kegiatan.
           </p>
 
           {weekDays.map((d) => {
