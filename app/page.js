@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import { getWorkweekDays, getWeekLabel } from "../lib/dateUtils";
 import { generateWeekPdf } from "../lib/pdfGenerator";
-import { computeMaxChars, formatMultiPoint } from "../lib/layoutUtils";
+import {
+  totalNaturalHeight,
+  pageAvailableHeight,
+  formatMultiPoint,
+} from "../lib/layoutUtils";
 
 const DEFAULT_CONFIG = {
   nama: "Afiq Atsal Adami",
@@ -22,49 +26,28 @@ function parseActivities(text) {
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 
-  if (rawLines.length === 0) return [];
-
-  const numRows = rawLines.length;
-  const { maxLines, kegiatanCharsPerLine, criticalPointCharsPerLine, kegiatanMax, criticalPointMax } =
-    computeMaxChars(numRows);
-
   return rawLines.map((line) => {
     const idx = line.indexOf("|");
     const kegiatanRaw = idx === -1 ? line : line.slice(0, idx).trim();
     const criticalPointRaw = idx === -1 ? "" : line.slice(idx + 1).trim();
 
     return {
-      // Titik koma (;) di dalam kegiatan/critical point akan otomatis
-      // dipecah jadi beberapa poin bernomor (1) 2) 3) ...) dalam 1 sel.
-      kegiatan: formatMultiPoint(kegiatanRaw, kegiatanCharsPerLine, maxLines, kegiatanMax),
-      criticalPoint: formatMultiPoint(
-        criticalPointRaw,
-        criticalPointCharsPerLine,
-        maxLines,
-        criticalPointMax
-      ),
+      // Titik koma (;) di dalam kegiatan/critical point otomatis dipecah
+      // jadi beberapa poin bernomor (1) 2) 3) ...) dalam 1 sel. Tinggi
+      // barisnya akan menyesuaikan otomatis, jadi tidak ada poin yang hilang.
+      kegiatan: formatMultiPoint(kegiatanRaw),
+      criticalPoint: formatMultiPoint(criticalPointRaw),
     };
   });
 }
 
-// Mengecek tiap baris kegiatan terhadap batas karakter yang dihitung,
-// mengembalikan daftar peringatan (baris ke berapa yang kepanjangan).
-function getLengthWarnings(activities, kegiatanMax, criticalPointMax) {
-  const warnings = [];
-  activities.forEach((act, i) => {
-    const lineNo = i + 1;
-    if (act.kegiatan.length > kegiatanMax) {
-      warnings.push(
-        `Baris ${lineNo}: kolom Kegiatan kepanjangan (${act.kegiatan.length}/${kegiatanMax} karakter)`
-      );
-    }
-    if (act.criticalPoint.length > criticalPointMax) {
-      warnings.push(
-        `Baris ${lineNo}: kolom Critical Point kepanjangan (${act.criticalPoint.length}/${criticalPointMax} karakter)`
-      );
-    }
-  });
-  return warnings;
+// Mengecek apakah total kebutuhan tinggi konten hari itu masih muat dalam
+// 1 halaman (dihitung dari tinggi alami tiap kegiatan, bukan dibagi rata).
+function checkDayFit(activities) {
+  if (activities.length === 0) return { fits: true, needed: 0, available: 0 };
+  const needed = totalNaturalHeight(activities);
+  const available = pageAvailableHeight();
+  return { fits: needed <= available, needed, available };
 }
 
 export default function Home() {
@@ -78,7 +61,6 @@ export default function Home() {
   const weekLabel = getWeekLabel(anchorDate);
   const weekKey = weekDays[0].isoDate;
 
-  // Load config tersimpan
   useEffect(() => {
     try {
       const saved = localStorage.getItem("ojt-config");
@@ -86,7 +68,6 @@ export default function Home() {
     } catch (e) {}
   }, []);
 
-  // Load draft minggu berjalan
   useEffect(() => {
     try {
       const saved = localStorage.getItem(`ojt-week-${weekKey}`);
@@ -213,18 +194,15 @@ export default function Home() {
             contoh: <code style={styles.code}>Briefing pagi | Poin 1; Poin 2; Poin 3</code>{" "}
             — otomatis diberi nomor 1) 2) 3) dalam satu sel.
             <br />
-            Tanggal & paraf otomatis diatur sistem. Batas karakter di bawah tiap
-            hari otomatis menyesuaikan jumlah kegiatan.
+            Tanggal & paraf otomatis diatur sistem. Tinggi tiap baris kegiatan
+            otomatis menyesuaikan isinya sendiri-sendiri (bukan dibagi rata) —
+            kegiatan singkat dapat baris pendek, kegiatan dengan banyak poin
+            dapat baris lebih tinggi, supaya semuanya muat rapi di 1 halaman.
           </p>
 
           {weekDays.map((d) => {
             const activities = parseActivities(dayTexts[d.isoDate] || "");
-            const numRows = Math.max(1, activities.length);
-            const { kegiatanMax, criticalPointMax } = computeMaxChars(numRows);
-            const warnings =
-              activities.length > 0
-                ? getLengthWarnings(activities, kegiatanMax, criticalPointMax)
-                : [];
+            const { fits, needed, available } = checkDayFit(activities);
 
             return (
               <div key={d.isoDate} style={styles.dayBlock}>
@@ -238,18 +216,16 @@ export default function Home() {
                   value={dayTexts[d.isoDate] || ""}
                   onChange={(e) => updateDayText(d.isoDate, e.target.value)}
                 />
-                <div style={styles.limitHint}>
-                  {activities.length || 0} kegiatan hari ini → maks. ± {kegiatanMax}{" "}
-                  karakter/kegiatan, ± {criticalPointMax} karakter/critical point.
-                </div>
-                {warnings.length > 0 && (
-                  <ul style={styles.warningList}>
-                    {warnings.map((w, idx) => (
-                      <li key={idx} style={styles.warningItem}>
-                        ⚠️ {w}
-                      </li>
-                    ))}
-                  </ul>
+                {activities.length > 0 && (
+                  <div style={fits ? styles.limitHintOk : styles.limitHintWarn}>
+                    {fits
+                      ? `✓ ${activities.length} kegiatan hari ini muat rapi dalam 1 halaman.`
+                      : `⚠️ ${activities.length} kegiatan hari ini kemungkinan sedikit melebihi 1 halaman (butuh ±${Math.round(
+                          needed
+                        )}mm, tersedia ±${Math.round(
+                          available
+                        )}mm). Pertimbangkan mempersingkat beberapa kegiatan/poin.`}
+                  </div>
                 )}
               </div>
             );
@@ -350,19 +326,16 @@ const styles = {
     fontFamily: "inherit",
     resize: "vertical",
   },
-  limitHint: {
+  limitHintOk: {
     fontSize: 11.5,
-    color: "#8a93a3",
+    color: "#3a7a4e",
     marginTop: 4,
   },
-  warningList: {
-    margin: "6px 0 0",
-    paddingLeft: 18,
-  },
-  warningItem: {
+  limitHintWarn: {
     fontSize: 12,
     color: "#b3492e",
-    lineHeight: 1.6,
+    marginTop: 4,
+    lineHeight: 1.5,
   },
   downloadButton: {
     width: "100%",
