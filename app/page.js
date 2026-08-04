@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getWorkweekDays, getWeekLabel } from "../lib/dateUtils";
+import { getWorkweekDays, getWeekLabel, getSaturday } from "../lib/dateUtils";
 import { generateWeekPdf } from "../lib/pdfGenerator";
 import {
   totalNaturalHeight,
@@ -32,17 +32,12 @@ function parseActivities(text) {
     const criticalPointRaw = idx === -1 ? "" : line.slice(idx + 1).trim();
 
     return {
-      // Titik koma (;) di dalam kegiatan/critical point otomatis dipecah
-      // jadi beberapa poin bernomor (1) 2) 3) ...) dalam 1 sel. Tinggi
-      // barisnya akan menyesuaikan otomatis, jadi tidak ada poin yang hilang.
       kegiatan: formatMultiPoint(kegiatanRaw),
       criticalPoint: formatMultiPoint(criticalPointRaw),
     };
   });
 }
 
-// Mengecek apakah total kebutuhan tinggi konten hari itu masih muat dalam
-// 1 halaman (dihitung dari tinggi alami tiap kegiatan, bukan dibagi rata).
 function checkDayFit(activities) {
   if (activities.length === 0) return { fits: true, needed: 0, available: 0 };
   const needed = totalNaturalHeight(activities);
@@ -50,14 +45,27 @@ function checkDayFit(activities) {
   return { fits: needed <= available, needed, available };
 }
 
+function parseBulletPoints(text) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 export default function Home() {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [showSettings, setShowSettings] = useState(false);
   const [anchorDate, setAnchorDate] = useState(todayIso());
   const [dayTexts, setDayTexts] = useState({});
+  const [lampiranTexts, setLampiranTexts] = useState({
+    performanceGap: "",
+    operationalFindings: "",
+    businessOpportunity: "",
+  });
   const [status, setStatus] = useState("");
 
   const weekDays = getWorkweekDays(anchorDate);
+  const saturday = getSaturday(anchorDate);
   const weekLabel = getWeekLabel(anchorDate);
   const weekKey = weekDays[0].isoDate;
 
@@ -78,6 +86,23 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekKey]);
 
+  useEffect(() => {
+    const empty = { performanceGap: "", operationalFindings: "", businessOpportunity: "" };
+    try {
+      const saved = localStorage.getItem(`ojt-lampiran-${weekKey}`);
+      setLampiranTexts(saved ? JSON.parse(saved) : empty);
+    } catch (e) {
+      setLampiranTexts(empty);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekKey]);
+
+  function updateLampiranText(field, value) {
+    const updated = { ...lampiranTexts, [field]: value };
+    setLampiranTexts(updated);
+    localStorage.setItem(`ojt-lampiran-${weekKey}`, JSON.stringify(updated));
+  }
+
   function saveConfig(newConfig) {
     setConfig(newConfig);
     localStorage.setItem("ojt-config", JSON.stringify(newConfig));
@@ -90,12 +115,20 @@ export default function Home() {
   }
 
   function handleDownload() {
-    const weekPayload = weekDays.map((d) => ({
+    const weekdayPayload = weekDays.map((d) => ({
       hariTanggal: d.hariTanggal,
       activities: parseActivities(dayTexts[d.isoDate] || ""),
     }));
 
-    const emptyDays = weekPayload.filter((d) => d.activities.length === 0);
+    const saturdayRaw = dayTexts[saturday.isoDate] || "";
+    const saturdayPayload =
+      saturdayRaw.trim().length > 0
+        ? [{ hariTanggal: saturday.hariTanggal, activities: parseActivities(saturdayRaw) }]
+        : [];
+
+    const fullPayload = [...weekdayPayload, ...saturdayPayload];
+
+    const emptyDays = weekdayPayload.filter((d) => d.activities.length === 0);
     if (emptyDays.length > 0) {
       setStatus(
         "⚠️ Ada hari yang belum diisi kegiatannya. Tetap akan dibuat sebagai baris kosong."
@@ -104,13 +137,21 @@ export default function Home() {
       setStatus("");
     }
 
-    const doc = generateWeekPdf(config, weekPayload);
-    const filename = `Lembar_Daily_OJT_${weekDays[0].isoDate}_sd_${weekDays[4].isoDate}.pdf`;
+    const lampiran = {
+      performanceGap: parseBulletPoints(lampiranTexts.performanceGap),
+      operationalFindings: parseBulletPoints(lampiranTexts.operationalFindings),
+      businessOpportunity: parseBulletPoints(lampiranTexts.businessOpportunity),
+    };
+
+    const doc = generateWeekPdf(config, fullPayload, lampiran);
+    const lastIso = saturdayPayload.length > 0 ? saturday.isoDate : weekDays[4].isoDate;
+    const filename = `Lembar_Daily_OJT_${weekDays[0].isoDate}_sd_${lastIso}.pdf`;
     doc.save(filename);
     setStatus(
       "✅ PDF berhasil dibuat dan diunduh: " +
         filename +
-        ". Kalau ada baris yang kepanjangan, otomatis dipotong (…) supaya tidak meluber."
+        (saturdayPayload.length > 0 ? " (termasuk Sabtu)" : "") +
+        "."
     );
   }
 
@@ -189,14 +230,15 @@ export default function Home() {
           <p style={styles.hint}>
             Format tiap baris: <code style={styles.code}>Kegiatan | Critical point pembelajaran</code>
             <br />
-            Satu baris = satu nomor kegiatan. Kalau 1 kegiatan punya beberapa poin
-            pembelajaran, pisahkan pakai titik koma (<code style={styles.code}>;</code>),
-            contoh: <code style={styles.code}>Briefing pagi | Poin 1; Poin 2; Poin 3</code>{" "}
-            — otomatis diberi nomor 1) 2) 3) dalam satu sel.
+            Satu baris = satu nomor kegiatan. Kalau 1 kegiatan punya beberapa
+            poin/paragraf, pisahkan pakai titik koma (<code style={styles.code}>;</code>),
+            contoh: <code style={styles.code}>Briefing pagi | 1. Poin pertama; 2. Poin kedua</code>{" "}
+            — tiap poin otomatis jadi baris baru (nomornya ikut apa yang Anda
+            ketik sendiri, sistem tidak menambah nomor lagi).
             <br />
             Tanggal & paraf otomatis diatur sistem. Tinggi tiap baris kegiatan
             otomatis menyesuaikan isinya sendiri-sendiri (bukan dibagi rata) —
-            kegiatan singkat dapat baris pendek, kegiatan dengan banyak poin
+            kegiatan singkat dapat baris pendek, kegiatan dengan isi panjang
             dapat baris lebih tinggi, supaya semuanya muat rapi di 1 halaman.
           </p>
 
@@ -230,6 +272,79 @@ export default function Home() {
               </div>
             );
           })}
+
+          {(() => {
+            const satActivities = parseActivities(dayTexts[saturday.isoDate] || "");
+            const { fits, needed, available } = checkDayFit(satActivities);
+            const isFilled = (dayTexts[saturday.isoDate] || "").trim().length > 0;
+
+            return (
+              <div style={styles.optionalDayBlock}>
+                <div style={styles.dayLabel}>
+                  {saturday.hariTanggal}{" "}
+                  <span style={styles.optionalTag}>(Opsional — kosongkan kalau tidak masuk)</span>
+                </div>
+                <textarea
+                  style={styles.textarea}
+                  rows={3}
+                  placeholder="Kosongkan kalau tidak masuk hari Sabtu ini. Isi kalau masuk, format sama seperti hari lainnya."
+                  value={dayTexts[saturday.isoDate] || ""}
+                  onChange={(e) => updateDayText(saturday.isoDate, e.target.value)}
+                />
+                {isFilled && satActivities.length > 0 && (
+                  <div style={fits ? styles.limitHintOk : styles.limitHintWarn}>
+                    {fits
+                      ? `✓ ${satActivities.length} kegiatan hari Sabtu muat rapi dalam 1 halaman.`
+                      : `⚠️ Kemungkinan sedikit melebihi 1 halaman (butuh ±${Math.round(
+                          needed
+                        )}mm, tersedia ±${Math.round(available)}mm).`}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </section>
+
+        <section style={styles.card}>
+          <h2 style={styles.sectionTitle}>Lampiran (opsional)</h2>
+          <p style={styles.hint}>
+            Ditambahkan sebagai 1 halaman ekstra di akhir PDF kalau salah satu
+            kolom di bawah diisi. Satu baris = satu poin bullet. Kosongkan
+            semua kalau minggu ini tidak perlu lampiran.
+          </p>
+
+          <div style={styles.dayBlock}>
+            <div style={styles.dayLabel}>1. Performance Gap</div>
+            <textarea
+              style={styles.textarea}
+              rows={3}
+              placeholder={"Poin pertama\nPoin kedua"}
+              value={lampiranTexts.performanceGap}
+              onChange={(e) => updateLampiranText("performanceGap", e.target.value)}
+            />
+          </div>
+
+          <div style={styles.dayBlock}>
+            <div style={styles.dayLabel}>2. Operational Findings</div>
+            <textarea
+              style={styles.textarea}
+              rows={3}
+              placeholder={"Poin pertama\nPoin kedua"}
+              value={lampiranTexts.operationalFindings}
+              onChange={(e) => updateLampiranText("operationalFindings", e.target.value)}
+            />
+          </div>
+
+          <div style={styles.dayBlock}>
+            <div style={styles.dayLabel}>3. Business Opportunity</div>
+            <textarea
+              style={styles.textarea}
+              rows={3}
+              placeholder={"Poin pertama\nPoin kedua"}
+              value={lampiranTexts.businessOpportunity}
+              onChange={(e) => updateLampiranText("businessOpportunity", e.target.value)}
+            />
+          </div>
         </section>
 
         <button style={styles.downloadButton} onClick={handleDownload}>
@@ -308,6 +423,18 @@ const styles = {
     color: "#c0504d",
   },
   dayBlock: { marginBottom: 16 },
+  optionalDayBlock: {
+    marginBottom: 4,
+    padding: 12,
+    borderRadius: 10,
+    border: "1px dashed #c9cfda",
+    background: "#fafbfd",
+  },
+  optionalTag: {
+    fontWeight: 500,
+    color: "#9aa3b2",
+    fontSize: 11.5,
+  },
   dayLabel: {
     fontWeight: 700,
     color: "#1f3864",
