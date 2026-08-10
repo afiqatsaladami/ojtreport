@@ -3,11 +3,7 @@
 import { useEffect, useState } from "react";
 import { getWorkweekDays, getWeekLabel, getSaturday } from "../lib/dateUtils";
 import { generateWeekPdf } from "../lib/pdfGenerator";
-import {
-  totalNaturalHeight,
-  pageAvailableHeight,
-  formatMultiPoint,
-} from "../lib/layoutUtils";
+import { computeDayLayout, formatMultiPoint } from "../lib/layoutUtils";
 
 const DEFAULT_CONFIG = {
   nama: "Afiq Atsal Adami",
@@ -39,10 +35,9 @@ function parseActivities(text) {
 }
 
 function checkDayFit(activities) {
-  if (activities.length === 0) return { fits: true, needed: 0, available: 0 };
-  const needed = totalNaturalHeight(activities);
-  const available = pageAvailableHeight();
-  return { fits: needed <= available, needed, available };
+  if (activities.length === 0) return { fits: true, needed: 0, available: 0, fontSize: 10 };
+  const { fits, totalHeight, available, fontSize } = computeDayLayout(activities);
+  return { fits, needed: totalHeight, available, fontSize };
 }
 
 function parseBulletPoints(text) {
@@ -236,15 +231,15 @@ export default function Home() {
             — tiap poin otomatis jadi baris baru (nomornya ikut apa yang Anda
             ketik sendiri, sistem tidak menambah nomor lagi).
             <br />
-            Tanggal & paraf otomatis diatur sistem. Tinggi tiap baris kegiatan
-            otomatis menyesuaikan isinya sendiri-sendiri (bukan dibagi rata) —
-            kegiatan singkat dapat baris pendek, kegiatan dengan isi panjang
-            dapat baris lebih tinggi, supaya semuanya muat rapi di 1 halaman.
+            Tanggal & paraf otomatis diatur sistem. Tinggi tabel mengikuti
+            kebutuhan konten aslinya (tidak dipaksa penuh 1 halaman) — kalau
+            kontennya banyak, font otomatis mengecil supaya tetap muat.
           </p>
 
           {weekDays.map((d) => {
             const activities = parseActivities(dayTexts[d.isoDate] || "");
-            const { fits, needed, available } = checkDayFit(activities);
+            const { fits, needed, available, fontSize } = checkDayFit(activities);
+            const shrunk = fontSize < 10;
 
             return (
               <div key={d.isoDate} style={styles.dayBlock}>
@@ -261,8 +256,10 @@ export default function Home() {
                 {activities.length > 0 && (
                   <div style={fits ? styles.limitHintOk : styles.limitHintWarn}>
                     {fits
-                      ? `✓ ${activities.length} kegiatan hari ini muat rapi dalam 1 halaman.`
-                      : `⚠️ ${activities.length} kegiatan hari ini kemungkinan sedikit melebihi 1 halaman (butuh ±${Math.round(
+                      ? `✓ ${activities.length} kegiatan hari ini muat dalam 1 halaman${
+                          shrunk ? ` (font otomatis diperkecil ke ${fontSize}pt)` : ""
+                        }.`
+                      : `⚠️ ${activities.length} kegiatan hari ini kemungkinan sedikit melebihi 1 halaman walau font sudah diperkecil ke ${fontSize}pt (butuh ±${Math.round(
                           needed
                         )}mm, tersedia ±${Math.round(
                           available
@@ -275,7 +272,8 @@ export default function Home() {
 
           {(() => {
             const satActivities = parseActivities(dayTexts[saturday.isoDate] || "");
-            const { fits, needed, available } = checkDayFit(satActivities);
+            const { fits, needed, available, fontSize } = checkDayFit(satActivities);
+            const shrunk = fontSize < 10;
             const isFilled = (dayTexts[saturday.isoDate] || "").trim().length > 0;
 
             return (
@@ -294,8 +292,10 @@ export default function Home() {
                 {isFilled && satActivities.length > 0 && (
                   <div style={fits ? styles.limitHintOk : styles.limitHintWarn}>
                     {fits
-                      ? `✓ ${satActivities.length} kegiatan hari Sabtu muat rapi dalam 1 halaman.`
-                      : `⚠️ Kemungkinan sedikit melebihi 1 halaman (butuh ±${Math.round(
+                      ? `✓ ${satActivities.length} kegiatan hari Sabtu muat dalam 1 halaman${
+                          shrunk ? ` (font otomatis diperkecil ke ${fontSize}pt)` : ""
+                        }.`
+                      : `⚠️ Kemungkinan sedikit melebihi 1 halaman walau font sudah diperkecil ke ${fontSize}pt (butuh ±${Math.round(
                           needed
                         )}mm, tersedia ±${Math.round(available)}mm).`}
                   </div>
